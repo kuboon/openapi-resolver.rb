@@ -1,3 +1,3 @@
-module Example
+module OpenapiResolver
   VERSION = "0.1.0".freeze
 end
