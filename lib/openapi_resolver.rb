@@ -1,30 +1,22 @@
 require "forwardable"
 require "pathname"
-
-module URI
-  class File < Generic
-    def open(*args, &)
-      ::File.open(path, &)
-    end
-  end
-end
+require "uri"
+require "yaml"
 
 class OpenapiResolver
   autoload :VERSION, "openapi_resolver/version"
 
   # subset of https://api.rubyonrails.org/classes/ActionDispatch/Request.html
-  Request = Data.define(:method, :path, :query_parameters, :body, :headers) do
-    def initialize(method:, path:, query_parameters: {}, body: nil, headers: {"Content-Type" => "application/json"})
-      super
-    end
+  Request = Data.define(:method, :path, :get, :post) do
+    def initialize(method:, path:, get: {}, post: nil) = super
+
+    def GET = get
+
+    def POST = post
   end
 
   # subset of https://api.rubyonrails.org/classes/ActionDispatch/Response.html
-  Response = Data.define(:status, :body) do
-    def headers
-      {"Content-Type" => "application/json"}
-    end
-  end
+  Response = Data.define(:status, :parsed_body)
 
   class Error < StandardError
     def self.wrap(e)
@@ -75,8 +67,14 @@ class OpenapiResolver
     end
 
     def call(uri)
-      # raise 'type error' unless uri.is_a?(URI)
-      @cache[uri] ||= YAML.load(uri.open(&:read))
+      @cache[uri] ||= case uri
+      when URI::HTTP, URI::HTTPS
+        YAML.load(uri.open(&:read))
+      when URI::File
+        YAML.load_file(uri.path)
+      else
+        raise Error.new("unknown uri #{uri}")
+      end
     end
   end
 
@@ -98,16 +96,21 @@ class OpenapiResolver
     end
 
     def fragment
-      @memo[:fragment] ||= "#/" + segments.map { |it| it.to_s.gsub("~", "~0").gsub("/", "~1") }.join("/")
+      @memo[:fragment] ||= "#/" + segments.map { |it| it.to_s.gsub("~", "~0").gsub("/", "~1").then { URI.encode_www_form_component(_1) } }.join("/")
     end
 
     def as_json
-      @memo[:json] ||= doc.dig(*segments) or raise Error.new("not found #{fragment} in #{uri}")
+      @memo[:json] ||= begin
+        return doc if segments.empty?
+        doc.dig(*segments).tap do |obj|
+          raise Error.new("invalid replacement: #{fragment}") if obj.is_a?(DocPointer) && obj.uri == uri
+        end
+      end
     end
-    delegate :[] => :as_json
+    delegate %i"[] dig" => :as_json
 
-    def dig(*child_segments)
-      self.class.new(uri:, segments: segments + child_segments, loader:)
+    def dig_new(*child_segments)
+      DocPointer.new(uri:, segments: segments + child_segments, loader:)
     end
 
     def ref?(obj)
@@ -125,6 +128,7 @@ class OpenapiResolver
     end
 
     def deep_resolve(obj = as_json)
+      obj = obj.as_json if obj.is_a?(DocPointer)
       raise Error, "type error" unless obj.is_a?(Hash) || obj.is_a?(Array)
       iter = obj.is_a?(Array) ? obj.each_with_index.map { [_2, _1] } : obj
       iter.each do |k, v|
@@ -167,16 +171,14 @@ class OpenapiResolver
 
       path_parameters, path = matched
       path_item = doc["paths"][path]
-      unless path_item.is_a?(PathItem)
-        doc_pointer =
-          if ref?(path_item)
-            resolve_ref(path_item)
-          else
-            DocPointer.new(uri:, segments: ["paths", path], loader:)
-          end
-        doc["paths"][path] = path_item = PathItem.new(root_doc: self, path:, doc_pointer:)
+      if ref?(path_item)
+        doc["paths"][path] = resolve_ref(path_item)
+        path_item = PathItem.new(doc["paths"][path])
+      elsif path_item.is_a?(DocPointer)
+        path_item = PathItem.new(path_item)
+      else
+        path_item = PathItem.new(dig_new("paths", path))
       end
-
       begin
         path_item.parameters_and_operation_for_method(request.method) => {parameters:, operation:}
 
@@ -185,7 +187,7 @@ class OpenapiResolver
         end
 
         if parameters in query:
-          yield query, "#", request.query_parameters, "query parameters for #{path} in #{uri}"
+          yield query, "#", request.GET, "query parameters for #{path} in #{uri}"
         end
 
         if parameters in header:
@@ -211,6 +213,7 @@ class OpenapiResolver
           return request.path.sub(server_url.path, "")
         end
       end
+      nil
     end
 
     def path_matchers
@@ -226,22 +229,20 @@ class OpenapiResolver
 
   class PathItem
     attr_reader :doc_pointer
-    def initialize(root_doc:, path:, doc_pointer:)
-      @root_doc = root_doc
-      @path = path
+    def initialize(doc_pointer)
       @doc_pointer = doc_pointer
-      @cache = {}
+      @memo = {}
     end
 
     def inspect
-      "#<#{self.class.name} @path=#{@path}>"
+      "#<PathItem uri=#{uri} fragment=#{fragment}>"
     end
 
     def parameters_and_operation_for_method(method_)
       method = method_.downcase
-      @cache[method] ||= begin
-        operation = doc_pointer[method]
-        raise Error.new("unknown method '#{method}' for #{@path}") unless operation
+      raise Error.new("unknown method '#{method}' for #{doc_pointer.fragment}") unless doc_pointer[method]
+      @memo[method] ||= begin
+        operation = doc_pointer.dig_new(method)
 
         doc_pointer.deep_resolve(doc_pointer["parameters"]) if doc_pointer["parameters"]
         doc_pointer.deep_resolve(operation["parameters"]) if operation["parameters"]
@@ -249,7 +250,7 @@ class OpenapiResolver
         parameters = doc_pointer["parameters"].to_a + operation["parameters"].to_a
         {
           parameters: generate_unified_parameters(parameters),
-          operation: Operation.new(doc_pointer:, method:, operation:)
+          operation: Operation.new(operation)
         }
       rescue Error => e
         raise e.add_message({doc_pointer:, method:})
@@ -275,53 +276,55 @@ class OpenapiResolver
     end
   end
 
-  Operation = Data.define(:doc_pointer, :method, :operation) do
+  class Operation
+    def initialize(doc_pointer)
+      @doc_pointer = doc_pointer
+    end
+
     def each_schema(request:, response:, &block)
-      content_type = request.headers["Content-Type"]
-      req_schema = request_body_schema(content_type:, has_body: request.body&.present?)
+      req_schema = request_body_schema(has_body: request.POST&.present?)
       if req_schema
-        yield doc_pointer.doc.merge("$id" => doc_pointer.uri.to_s), req_schema, request.body
+        yield @doc_pointer.doc.merge("$id" => @doc_pointer.uri.to_s), req_schema, request.POST, "request body"
       end
 
-      content_type = response.headers["Content-Type"]
-      res_schema = response_schema(status: response.status, content_type:)
+      res_schema = response_schema(status: response.status)
       if res_schema
-        yield doc_pointer.doc.merge("$id" => doc_pointer.uri.to_s), res_schema, response.body
+        yield @doc_pointer.doc.merge("$id" => @doc_pointer.uri.to_s), res_schema, response.parsed_body, "response body"
       end
     rescue => e
-      raise Error.wrap(e).add_message({method:, content_type:})
+      raise Error.wrap(e).add_message(method: @doc_pointer.segments.last)
     end
 
     private
 
-    def request_body_schema(content_type:, has_body:)
-      req_body = operation["requestBody"]
+    def content_type = "application/json"
+
+    def request_body_schema(has_body:)
+      req_body = @doc_pointer["requestBody"]
       return if !has_body && !req_body
+      raise Error.new("missing requestBody schema") unless req_body
       unless has_body
         raise Error.new("request body required") if req_body["required"]
       end
-      raise Error.new("missing requestBody schema") unless req_body
-      raise Error.new("missing content-type") if !content_type
       # return if content_type == 'application/x-www-form-urlencoded' # rspec
       raise Error.new("unknown content-type #{content_type}") unless req_body.dig("content", content_type)
       schema = req_body.dig("content", content_type, "schema")
       raise Error.new("missing schema for #{content_type}") unless schema
-      doc_pointer.dig(method, "requestBody", "content", content_type, "schema").fragment
+      @doc_pointer.dig_new("requestBody", "content", content_type, "schema").fragment
     end
 
-    def response_schema(status:, content_type:)
-      resp = operation["responses"][status.to_s]
+    def response_schema(status:)
+      resp = @doc_pointer["responses"][status.to_s]
       raise Error.new("unknown response code #{status}") unless resp
       return if status == 204
       content = resp["content"] or raise Error.new("missing content. resp: #{resp}")
-      raise Error.new("missing content-type") unless content_type
       unless content[content_type]
         Rails.logger.warn "unknown content-type #{content_type} for #{status} at #{@method} #{@path}"
         return
       end
       schema = content[content_type]["schema"]
       raise Error.new("missing schema") unless schema
-      doc_pointer.dig(method, "responses", status, "content", content_type, "schema").fragment
+      @doc_pointer.dig_new("responses", status, "content", content_type, "schema").fragment
     end
   end
 end
