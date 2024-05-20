@@ -10,7 +10,7 @@ describe OpenapiResolver::DocPointer do
     it do
       doc_pointer.deep_resolve
       expect(doc_pointer.dig("paths", "/pets").class).must_equal(OpenapiResolver::DocPointer)
-      expect(doc_pointer.dig("paths", "/pets", "get")).must_not_be_nil
+      expect(doc_pointer.dig("paths", "/pets", "get")).wont_be_nil
     end
   end
 end
