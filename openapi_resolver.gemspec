@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.summary = "Extracts json schema from OpenApi document"
   spec.homepage = "https://github.com/kuboon/openapi-resolver.rb"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.0"
+  spec.required_ruby_version = ">= 3.2"
 
   spec.metadata = {
     "bug_tracker_uri" => "https://github.com/kuboon/openapi-resolver.rb/issues",
