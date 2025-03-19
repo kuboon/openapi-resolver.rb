@@ -42,7 +42,7 @@ class OpenapiResolver
         end
 
         if parameters in query:
-          yield query, "#", request.GET, "query parameters for #{path} in #{uri}"
+          yield query, "#", request.GET || {}, "query parameters for #{path} in #{uri}"
         end
 
         if parameters in header:

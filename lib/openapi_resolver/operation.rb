@@ -5,7 +5,7 @@ class OpenapiResolver
     end
 
     def each_schema(request:, response:, &block)
-      req_schema = request_body_schema(has_body: request.POST&.present?)
+      req_schema = request_body_schema(has_body: request.POST && !request.POST.empty?)
       if req_schema
         yield @doc_pointer.doc.merge("$id" => @doc_pointer.uri.to_s), req_schema, request.POST, "request body"
       end
@@ -39,8 +39,8 @@ class OpenapiResolver
     def response_schema(status:)
       resp = @doc_pointer["responses"][status.to_s]
       raise Error.new("unknown response code #{status}") unless resp
-      return if status == 204
-      content = resp["content"] or raise Error.new("missing content. resp: #{resp}")
+      content = resp["content"]
+      return if content.nil?
       unless content[content_type]
         Rails.logger.warn "unknown content-type #{content_type} for #{status} at #{@method} #{@path}"
         return
