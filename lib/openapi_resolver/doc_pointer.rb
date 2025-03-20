@@ -1,7 +1,7 @@
 require "forwardable"
 require "uri"
 
-class OpenapiResolver
+module OpenapiResolver
   REF = "$ref"
   DocPointer = Data.define(:uri, :segments, :loader) do
     extend Forwardable

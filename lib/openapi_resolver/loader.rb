@@ -1,4 +1,4 @@
-class OpenapiResolver
+module OpenapiResolver
   class Loader
     def initialize
       @cache = {}

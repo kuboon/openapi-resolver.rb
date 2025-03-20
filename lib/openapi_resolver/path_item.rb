@@ -1,4 +1,4 @@
-class OpenapiResolver
+module OpenapiResolver
   class PathItem
     attr_reader :doc_pointer
     def initialize(doc_pointer)

@@ -1,4 +1,4 @@
-class OpenapiResolver
+module OpenapiResolver
   class Operation
     def initialize(doc_pointer)
       @doc_pointer = doc_pointer

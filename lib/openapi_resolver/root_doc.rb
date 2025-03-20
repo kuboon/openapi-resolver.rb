@@ -2,7 +2,7 @@ require "uri"
 require "yaml"
 require_relative "doc_pointer"
 
-class OpenapiResolver
+module OpenapiResolver
   class RootDoc < DocPointer
     def server_urls
       @memo[:server_urls] ||= doc["servers"].map { URI.parse(_1["url"]) }
