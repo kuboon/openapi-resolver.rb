@@ -26,9 +26,9 @@ class OpenapiResolverTest < Minitest::Test
           if context.start_with?("query parameters")
             patches = []
             results.each do |result|
-              type, error_data, data_pointer = %w[type data data_pointer].map {result[_1]}
+              type, error_data, data_pointer = %w[type data data_pointer].map { result[_1] }
               if type == "integer" && error_data.is_a?(String)
-                patches << { 'op' => 'replace', 'path' => data_pointer, 'value' => error_data.to_i }
+                patches << {"op" => "replace", "path" => data_pointer, "value" => error_data.to_i}
               end
             end
             unless patches.empty?
@@ -51,7 +51,7 @@ class OpenapiResolverTest < Minitest::Test
 
       describe "GET /v1/pets" do
         let(:response) { {status: 200, parsed_body: [{id: 123, name: "hoge"}]} }
-        it("no param"){ assert_empty subject }
+        it("no param") { assert_empty subject }
       end
       describe "GET /v1/pets/123" do
         let(:response) { {status: 200, parsed_body: {id: 123, name: "hoge"}} }
@@ -69,8 +69,9 @@ class OpenapiResolverTest < Minitest::Test
       end
 
       describe "POST /v1/pets" do
-        let(:request) { 
-          method(:request).super_method.call.merge(post: {id: 789, name: "piyo"}) }
+        let(:request) {
+          method(:request).super_method.call.merge(post: {id: 789, name: "piyo"})
+        }
         let(:response) { {status: 201, parsed_body: nil} }
         it { assert_empty subject }
       end
@@ -78,13 +79,13 @@ class OpenapiResolverTest < Minitest::Test
       describe "GET /v1/pets with invalid query parameters" do
         let(:request) { {method: "GET", path: "/v1/pets", get: {"limit" => "invalid"}} }
         let(:response) { {status: 200, parsed_body: [{id: 123, name: "hoge"}]} }
-        it("has no error"){ assert_empty subject }
-      end 
+        it("has no error") { assert_empty subject }
+      end
 
       describe "GET /v1/pets/{petId} with missing path parameters" do
         let(:request) { {method: "GET", path: "/v1/pets"} }
         let(:response) { {status: 200, parsed_body: [{id: 456, name: "fuga"}]} }
-        it("has no error"){ assert_empty subject }
+        it("has no error") { assert_empty subject }
       end
 
       describe "GET /unknown/path" do
@@ -93,7 +94,7 @@ class OpenapiResolverTest < Minitest::Test
         it "raises validation error" do
           assert_raises(OpenapiResolver::Error) { subject }
         end
-      end 
+      end
     end
   end
 end
